@@ -1,17 +1,18 @@
 import fenics as fe
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.signal import correlate
 
 if __name__ == "__main__":
-    n_elements = 100
+    n_elements = 1000
     L = 1.0
     Tfinal = 30.0
     target_CFL = 2.0
     mesh = fe.UnitIntervalMesh(n_elements)
 
     # Define velocity and diffusion coefficient
-    velocity = fe.Constant((2.0,))
-    diffusion = fe.Constant(0.04)
+    velocity = fe.Constant((4.0,))
+    diffusion = fe.Constant(0.004)
 
     # Define function space
     lagrange_polynomial_space_first_order = fe.FunctionSpace(
@@ -21,18 +22,12 @@ if __name__ == "__main__":
     # Define time-dependent boundary condition at x=0 using a Gaussian pulse
     A = 800.0
     t0 = 15.0
-    sigma = 2.5
+    sigma = 5.0
 
     u_D = fe.Constant(0.0)
 
     def inlet_value(t):
         return A*np.exp(-0.5*((t - t0)/sigma)**2)
-    
-    def tac_gamma(t, K=1.0, t0=3.0, alpha=3.0, beta=1.5):
-        if t <= t0:
-            return 0.0
-        x = (t - t0) / beta
-        return K * (x**alpha) * np.exp(-x)
 
     # Define boundary condition function to return whether we are on the boundary
     def boundary_boolean_function(x, on_boundary):
@@ -51,7 +46,7 @@ if __name__ == "__main__":
 
     # Define time stepping of implicit Euler method (=dt)
     h = L / n_elements
-    dt = 1e-2#target_CFL * h / velocity.values()[0]
+    dt = target_CFL * h / velocity.values()[0]
     n_steps = int(np.ceil(Tfinal / dt))
 
     # The force on the right-hand side
@@ -90,12 +85,12 @@ if __name__ == "__main__":
     t_current = 0.0
 
     # Store final solution for plotting
-    u_final = np.zeros((n_elements + 1, n_steps + 1))
-    u_final[:, 0] = u_old.vector().get_local()
+    u_final = np.zeros((n_steps + 1, n_elements + 1))
+    u_final[0, :] = u_old.vector().get_local()
 
     for i in range(n_steps):
         t_current += dt
-        u_D.assign(tac_gamma(t_current))
+        u_D.assign(inlet_value(t_current))
 
         # Assemble system, BC applied here
         fe.solve(
@@ -108,17 +103,43 @@ if __name__ == "__main__":
         u_old.assign(u_solution)
 
         # Store solution
-        u_final[:, i + 1] = u_solution.vector().get_local()
+        u_final[i + 1, :] = u_solution.vector().get_local()
 
     # Plot results as an image
-    x = np.linspace(0, 1, n_elements + 1)
-    T = np.linspace(0, n_steps * dt, n_steps + 1)
-    X, TT = np.meshgrid(x, T, indexing='ij')
-
-    plt.imshow(u_final, extent=[0,1,0,n_steps*dt], origin='lower', aspect='auto')
+    """
+    plt.figure(figsize=(8,6))
+    plt.imshow(
+        u_final.T,                      # transpose so cols=time, rows=space
+        extent=[0, n_steps*dt, 0, L],   # x: time, y: x
+        origin='lower',
+        aspect='auto'
+    )
+    plt.xlabel("t")
+    plt.ylabel("x")
     plt.colorbar(label="u(x,t)")
-    plt.title("1D Advection-Diffusion Equation Solution over Time")
-    plt.xlabel("x")
-    plt.ylabel("t")
     plt.show()
+    """
+
+    time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
+    ref = u_final[15,:]
+    u_washout = u_final[time_points > t0, :]
+    delays = np.zeros(u_washout.shape[0])
+    for i in range(u_washout.shape[0]):
+        corr = correlate(u_washout[i,:] - np.mean(u_washout[i,:]), ref - np.mean(ref), mode='full')
+        delay_idx = np.argmax(corr) - (len(ref))
+        delays[i] = delay_idx * h
+
+    id_max = np.argmax(delays)
+    time_points = np.linspace(0, n_steps*dt/2, u_washout.shape[0])
+    m,b = np.polyfit(time_points[time_points<0.1], delays[time_points<0.1], 1)
+    v_estimated = m
+    print(f'Estimated velocity: {v_estimated:.2f} cm/s (True velocity: {velocity.values()[0]} cm/s)')
+
+    plt.figure(figsize=(6,4))
+    plt.plot(time_points, delays, label='Estimated delays')
+    plt.plot(time_points[time_points<0.1], m*time_points[time_points<0.1] + b, 'r--', label=f'Fit: v={v_estimated:.2f} cm/s')
+    plt.xlabel('time'); plt.ylabel('Delay (s)'); plt.title('Estimated Delays vs Position'); plt.legend()
+    plt.show()
+
+    print("time_difference:", dt)
         
