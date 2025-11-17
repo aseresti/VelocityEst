@@ -12,7 +12,7 @@ if __name__ == "__main__":
     mesh = fe.IntervalMesh(n_elements, 0.0, L)
 
     # Define velocity and diffusion coefficient
-    velocity = fe.Constant((3.0,))
+    velocity = fe.Constant((30.0,))
     diffusion = fe.Constant(0.04)
 
     # Define function space
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     def boundary_boolean_function(x, on_boundary):
         return on_boundary and fe.near(x[0], 0.0)
     
-    # The homogeneous Dirichlet boundary condition
+    # The non-homogeneous Dirichlet boundary condition
     boundary_condition = fe.DirichletBC(
         lagrange_polynomial_space_first_order,
         u_D,
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     ################################################################################
 
     # Sampling u_final[0,:] every 3 seconds
-    sampling_duration = 1.0  # seconds
+    sampling_duration = 3.0  # seconds
     sampling_interval = int(Tfinal/sampling_duration)
     sampled_indices = np.arange(0, u_final.shape[0], sampling_interval)
     time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
@@ -187,14 +187,13 @@ if __name__ == "__main__":
     # Using Singular Value Decomposition (SVD) Method for velocity estimation
     U, S, VT = np.linalg.svd(A, full_matrices=False)
     S = np.diag(S)
-    num_modes = 10  # number of modes to retain
+    num_modes = 2  # number of modes to retain
     U_reduced = U[:, :num_modes]
     S_reduced = S[:num_modes, :num_modes]
     VT_reduced = VT[:num_modes, :]
 
     # solving for system response Ax = output_function using psedu-inverse method
     x_sol = VT_reduced.T @ np.linalg.pinv(S_reduced) @ U_reduced.T @ output_function # least-squares solution
-    print(len(x_sol))
     #x_sol, _, _, _ = np.linalg.lstsq(A, output_function, rcond=None)
 
     # Estimating velocity from the system response
@@ -211,3 +210,5 @@ if __name__ == "__main__":
     plt.title(f'Estimated System Response using SVD\n velocity = {v_estimated_svd:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)') 
     plt.legend()
     plt.show()
+
+    # todo: compute the actual system response by feeding a delta function as input and compare with the estimated response
