@@ -2,17 +2,18 @@ import fenics as fe
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import correlate
+from scipy.linalg import toeplitz
 
 if __name__ == "__main__":
     n_elements = 1000
-    L = 1.0
+    L = 10.0
     Tfinal = 30.0
     target_CFL = 2.0
-    mesh = fe.UnitIntervalMesh(n_elements)
+    mesh = fe.IntervalMesh(n_elements, 0.0, L)
 
     # Define velocity and diffusion coefficient
-    velocity = fe.Constant((4.0,))
-    diffusion = fe.Constant(0.004)
+    velocity = fe.Constant((30.0,))
+    diffusion = fe.Constant(0.04)
 
     # Define function space
     lagrange_polynomial_space_first_order = fe.FunctionSpace(
@@ -84,7 +85,7 @@ if __name__ == "__main__":
     # Time-stepping loop
     t_current = 0.0
 
-    # Store final solution for plotting
+    # Store final solution for plotting u_final(t,x)
     u_final = np.zeros((n_steps + 1, n_elements + 1))
     u_final[0, :] = u_old.vector().get_local()
 
@@ -105,12 +106,12 @@ if __name__ == "__main__":
         # Store solution
         u_final[i + 1, :] = u_solution.vector().get_local()
 
+    
     # Plot results as an image
-    """
     plt.figure(figsize=(8,6))
     plt.imshow(
-        u_final.T,                      # transpose so cols=time, rows=space
-        extent=[0, n_steps*dt, 0, L],   # x: time, y: x
+        u_final.T,                      
+        extent=[0, n_steps*dt, 0, L],   
         origin='lower',
         aspect='auto'
     )
@@ -118,8 +119,26 @@ if __name__ == "__main__":
     plt.ylabel("x")
     plt.colorbar(label="u(x,t)")
     plt.show()
-    """
 
+
+    # 3D plot of the results along t at specific x locations
+    fig = plt.figure(figsize=(8,6))
+    ax = fig.add_subplot(111, projection='3d')
+    plt.set_cmap('viridis')
+    x_locations = np.arange(0, L+0.1, 2.0)
+    x_indices = [int(x_loc / h) for x_loc in x_locations]
+    time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
+    for idx in x_indices:
+        ax.plot(time_points, u_final[:, idx], zs=idx*h, zdir='y', label=f'x={idx*h:.1f} cm')
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Position x (cm)')
+    ax.set_zlabel('Concentration u')
+    plt.title('Concentration vs Time at Different Positions')
+    plt.legend()
+    plt.show()
+
+
+    # Cross-correlation Method
     time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
     ref = u_final[15,:]
     u_washout = u_final[time_points > t0, :]
@@ -131,15 +150,51 @@ if __name__ == "__main__":
 
     id_max = np.argmax(delays)
     time_points = np.linspace(0, n_steps*dt/2, u_washout.shape[0])
-    m,b = np.polyfit(time_points[time_points<0.1], delays[time_points<0.1], 1)
+    t1 = 0.28
+    m,b = np.polyfit(time_points[time_points<t1], delays[time_points<t1], 1)
     v_estimated = m
     print(f'Estimated velocity: {v_estimated:.2f} cm/s (True velocity: {velocity.values()[0]} cm/s)')
 
     plt.figure(figsize=(6,4))
     plt.plot(time_points, delays, label='Estimated delays')
-    plt.plot(time_points[time_points<0.1], m*time_points[time_points<0.1] + b, 'r--', label=f'Fit: v={v_estimated:.2f} cm/s')
+    plt.plot(time_points[time_points<t1], m*time_points[time_points<t1] + b, 'r--', label=f'Fit: v={v_estimated:.2f} cm/s')
     plt.xlabel('time'); plt.ylabel('Delay (s)'); plt.title('Estimated Delays vs Position'); plt.legend()
     plt.show()
 
     print("time_difference:", dt)
-        
+    
+
+    ################################################################################
+    # Velocity Estimation using SVD Method
+    ################################################################################
+
+    # Sampling u_final[0,:] every 3 seconds
+    sampling_interval = int(Tfinal/1/dt) # Tfinal should be divided by both 3 and dt because dt is the time step and we want to sample every 3 seconds
+    sampled_indices = np.arange(0, u_final.shape[0], sampling_interval)
+    u_sampled = u_final[sampled_indices, :]
+    
+    # defining input and output functions of the system
+    input_function = u_sampled[:,0]
+    output_function = u_sampled[:,-1]
+
+    # creating the A matrix based on the input function using toeplitz structure
+    A = toeplitz(input_function, np.zeros(len(input_function)))
+
+    # Using Singular Value Decomposition (SVD) Method for velocity estimation
+    U, S, VT = np.linalg.svd(A, full_matrices=False)
+    S = np.diag(S)
+    num_modes = 5
+    U_reduced = U[:, :num_modes]
+    S_reduced = S[:num_modes, :num_modes]
+    VT_reduced = VT[:num_modes, :]
+
+    # solving for system response Ax = output_function using psedu-inverse method
+    x_sol = VT_reduced.T @ np.linalg.pinv(S_reduced) @ U_reduced.T @ output_function # least-squares solution
+    #x_sol, _, _, _ = np.linalg.lstsq(A, output_function, rcond=None)
+
+
+    # plotting the estimated system response
+    plt.figure(figsize=(6,4))
+    plt.plot(time_points,x_sol, label='Estimated System Response')
+    plt.xlabel('Sample Index'); plt.ylabel('Response Amplitude'); plt.title('Estimated System Response using SVD'); plt.legend()
+    plt.show()
