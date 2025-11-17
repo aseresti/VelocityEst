@@ -12,7 +12,7 @@ if __name__ == "__main__":
     mesh = fe.IntervalMesh(n_elements, 0.0, L)
 
     # Define velocity and diffusion coefficient
-    velocity = fe.Constant((30.0,))
+    velocity = fe.Constant((3.0,))
     diffusion = fe.Constant(0.04)
 
     # Define function space
@@ -115,8 +115,9 @@ if __name__ == "__main__":
         origin='lower',
         aspect='auto'
     )
-    plt.xlabel("t")
-    plt.ylabel("x")
+    plt.xlabel("time (s)")
+    plt.ylabel("x (cm)")
+    plt.title(f"Concentration u(x,t) over Space and Time\nPDE Simulation, velocity = {velocity.values()[0]} cm/s")
     plt.colorbar(label="u(x,t)")
     plt.show()
 
@@ -169,8 +170,11 @@ if __name__ == "__main__":
     ################################################################################
 
     # Sampling u_final[0,:] every 3 seconds
-    sampling_interval = int(Tfinal/1/dt) # Tfinal should be divided by both 3 and dt because dt is the time step and we want to sample every 3 seconds
+    sampling_duration = 1.0  # seconds
+    sampling_interval = int(Tfinal/sampling_duration)
     sampled_indices = np.arange(0, u_final.shape[0], sampling_interval)
+    time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
+    time_points_sampled = time_points[sampled_indices]
     u_sampled = u_final[sampled_indices, :]
     
     # defining input and output functions of the system
@@ -183,18 +187,27 @@ if __name__ == "__main__":
     # Using Singular Value Decomposition (SVD) Method for velocity estimation
     U, S, VT = np.linalg.svd(A, full_matrices=False)
     S = np.diag(S)
-    num_modes = 5
+    num_modes = 10  # number of modes to retain
     U_reduced = U[:, :num_modes]
     S_reduced = S[:num_modes, :num_modes]
     VT_reduced = VT[:num_modes, :]
 
     # solving for system response Ax = output_function using psedu-inverse method
     x_sol = VT_reduced.T @ np.linalg.pinv(S_reduced) @ U_reduced.T @ output_function # least-squares solution
+    print(len(x_sol))
     #x_sol, _, _, _ = np.linalg.lstsq(A, output_function, rcond=None)
 
+    # Estimating velocity from the system response
+    delay_indices = np.argmax(x_sol)  # index of maximum response
+    estimated_delay = time_points_sampled[delay_indices]
+    v_estimated_svd = L / estimated_delay
+    print(f'Estimated velocity using SVD: {v_estimated_svd:.2f} cm/s (True velocity: {velocity.values()[0]} cm/s)')
 
     # plotting the estimated system response
     plt.figure(figsize=(6,4))
-    plt.plot(time_points,x_sol, label='Estimated System Response')
-    plt.xlabel('Sample Index'); plt.ylabel('Response Amplitude'); plt.title('Estimated System Response using SVD'); plt.legend()
+    plt.plot(time_points_sampled,x_sol, label='Estimated System Response')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Response Amplitude') 
+    plt.title(f'Estimated System Response using SVD\n velocity = {v_estimated_svd:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)') 
+    plt.legend()
     plt.show()
