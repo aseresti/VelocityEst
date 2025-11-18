@@ -3,6 +3,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import correlate
 from scipy.linalg import toeplitz
+from scipy.interpolate import interp1d
+
+plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams['mathtext.fontset'] = 'custom'
+plt.rcParams['mathtext.rm'] = 'Times New Roman'
 
 if __name__ == "__main__":
     n_elements = 1000
@@ -12,7 +17,7 @@ if __name__ == "__main__":
     mesh = fe.IntervalMesh(n_elements, 0.0, L)
 
     # Define velocity and diffusion coefficient
-    velocity = fe.Constant((30.0,))
+    velocity = fe.Constant((15.0,))
     diffusion = fe.Constant(0.04)
 
     # Define function space
@@ -106,7 +111,7 @@ if __name__ == "__main__":
         # Store solution
         u_final[i + 1, :] = u_solution.vector().get_local()
 
-    
+    '''
     # Plot results as an image
     plt.figure(figsize=(8,6))
     plt.imshow(
@@ -120,7 +125,7 @@ if __name__ == "__main__":
     plt.title(f"Concentration u(x,t) over Space and Time\nPDE Simulation, velocity = {velocity.values()[0]} cm/s")
     plt.colorbar(label="u(x,t)")
     plt.show()
-
+    '''
 
     # 3D plot of the results along t at specific x locations
     fig = plt.figure(figsize=(8,6))
@@ -138,8 +143,10 @@ if __name__ == "__main__":
     plt.legend()
     plt.show()
 
-
-    # Cross-correlation Method
+    ################################################################################
+    # Velocity Estimation using Cross-correlation Method
+    ################################################################################
+    '''
     time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
     ref = u_final[15,:]
     u_washout = u_final[time_points > t0, :]
@@ -151,7 +158,7 @@ if __name__ == "__main__":
 
     id_max = np.argmax(delays)
     time_points = np.linspace(0, n_steps*dt/2, u_washout.shape[0])
-    t1 = 0.28
+    t1 = 0.14
     m,b = np.polyfit(time_points[time_points<t1], delays[time_points<t1], 1)
     v_estimated = m
     print(f'Estimated velocity: {v_estimated:.2f} cm/s (True velocity: {velocity.values()[0]} cm/s)')
@@ -162,7 +169,7 @@ if __name__ == "__main__":
     plt.xlabel('time'); plt.ylabel('Delay (s)'); plt.title('Estimated Delays vs Position'); plt.legend()
     plt.show()
 
-    print("time_difference:", dt)
+    
     
 
     ################################################################################
@@ -205,10 +212,163 @@ if __name__ == "__main__":
     # plotting the estimated system response
     plt.figure(figsize=(6,4))
     plt.plot(time_points_sampled,x_sol, label='Estimated System Response')
-    plt.xlabel('Sample Index')
+    plt.xlabel('time (s)')
     plt.ylabel('Response Amplitude') 
-    plt.title(f'Estimated System Response using SVD\n velocity = {v_estimated_svd:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)') 
+    plt.title(f'Using truncated SVD (number of modes = {num_modes})\n velocity = {v_estimated_svd:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)')
+
+    ################################################################################
+    ################################################################################
+    # todo: compute the actual system response by feeding a delta function as input and compare with the estimated response
+    ################################################################################
+    ################################################################################
+    # defining a very thin Gaussian pulse as a delta function
+    
+    A = 800.0
+    t0 = 0.0
+    sigma = 0.1
+
+    u_D = fe.Constant(0.0)
+
+    def inlet_value_delta(t):
+        return A*np.exp(-0.5*((t - t0)/sigma)**2)
+    
+    u_old.vector()[:] = 0.0
+
+    # Define boundary condition function to return whether we are on the boundary
+    def boundary_boolean_function(x, on_boundary):
+        return on_boundary and fe.near(x[0], 0.0)
+    
+    # The non-homogeneous Dirichlet boundary condition
+    boundary_condition = fe.DirichletBC(
+        lagrange_polynomial_space_first_order,
+        u_D,
+        boundary_boolean_function,
+    )
+
+    u_final_delta = np.zeros((n_steps + 1, n_elements + 1))
+    u_final_delta[0, :] = u_old.vector().get_local()
+    
+    t_current = 0.0
+    for i in range(n_steps):
+        t_current += dt
+        u_D.assign(inlet_value_delta(t_current))
+
+        # Assemble system, BC applied here
+        fe.solve(
+            weak_form_lhs == weak_form_rhs,
+            u_solution,
+            boundary_condition,
+        )
+
+        # Update for next time step
+        u_old.assign(u_solution)
+
+        # Store solution
+        u_final_delta[i + 1, :] = u_solution.vector().get_local()
+    
+    
+    # sampling u_final_delta[0,:] every 0.05 seconds
+    sampling_duration = 0.05  # seconds
+    sampling_interval = int(sampling_duration/dt)
+    sampled_indices = np.arange(0, u_final_delta.shape[0], sampling_interval)
+    time_points = np.linspace(0, n_steps*dt, u_final_delta.shape[0])
+    time_points_sampled = time_points[sampled_indices]
+    u_sampled = u_final_delta[sampled_indices, :]
+    
+    # defining input and output functions of the system
+    input_function = u_sampled[:,0]
+    print(len(input_function))
+    output_function = u_sampled[:,-1]
+
+    # creating the A matrix based on the input function using toeplitz structure
+    A = toeplitz(input_function, np.zeros(len(input_function)))
+
+    # Using Singular Value Decomposition (SVD) Method for velocity estimation
+    U, S, VT = np.linalg.svd(A, full_matrices=False)
+    S = np.diag(S)
+
+    num_modes = 10  # number of modes to retain
+    U_reduced = U[:, :num_modes]
+    S_reduced = S[:num_modes, :num_modes]
+    VT_reduced = VT[:num_modes, :]
+
+    # solving for system response Ax = output_function using psedu-inverse method
+    x_sol = VT.T @ np.linalg.pinv(S) @ U.T @ output_function # least-squares solution
+    #x_sol, _, _, _ = np.linalg.lstsq(A, output_function, rcond=None)
+
+    # plotting the estimated system response
+    plt.plot(time_points_sampled,x_sol/100, color='red',marker='.', label='Actual System Response/100')
     plt.legend()
     plt.show()
 
-    # todo: compute the actual system response by feeding a delta function as input and compare with the estimated response
+    # 3D plot of the results along t at specific x locations
+    fig = plt.figure(figsize=(8,6))
+    ax = fig.add_subplot(111, projection='3d')
+    plt.set_cmap('viridis')
+    x_locations = np.arange(0, L+0.1, 2.0)
+    x_indices = [int(x_loc / h) for x_loc in x_locations]
+    time_points = np.linspace(0, n_steps*dt, u_final_delta.shape[0])
+    for idx in x_indices:
+        ax.plot(time_points, u_final_delta[:, idx], zs=idx*h, zdir='y', label=f'x={idx*h:.1f} cm')
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Position x (cm)')
+    ax.set_zlabel('Concentration u')
+    plt.title('Concentration vs Time at Different Positions')
+    plt.legend()
+    plt.show()
+
+    print("time_difference:", dt)
+    '''
+    
+    ################################################################################
+    # Velocity Estimation using SVD with Tikhonov Regularization
+    ################################################################################
+
+    # Sampling u_final[0,:] = 30 seconds every 3 seconds: having 10 samples in total
+    sampling_indices = np.arange(0, u_final.shape[0], int(u_final.shape[0]/15))
+    time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
+    time_points_sampled = time_points[sampling_indices]
+    u_sampled = u_final[sampling_indices, :]
+    
+    # defining input and output functions of the system
+    input_function = u_sampled[:,0]
+    output_function = u_sampled[:,-1]
+
+    # interpolating the input and output functions to have a length 100
+    interp_length = 1000
+    interp_input = interp1d(time_points_sampled, input_function, kind='cubic')
+    interp_output = interp1d(time_points_sampled, output_function, kind='cubic')
+    time_points_sampled = np.linspace(time_points_sampled[0], time_points_sampled[-1], interp_length)
+    input_function = interp_input(time_points_sampled)
+    output_function = interp_output(time_points_sampled)
+
+
+    # creating the A matrix based on the input function using toeplitz structure
+    A = toeplitz(input_function, np.zeros(len(input_function)))
+    # Using Singular Value Decomposition (SVD) Method for velocity estimation with Tikhonov Regularization
+    U, S, VT = np.linalg.svd(A, full_matrices=False)
+    S = np.diag(S)
+    num_modes = 3  # number of modes to retain
+    U_reduced = U#[:, :num_modes]
+    S_reduced = S#[:num_modes, :num_modes]
+    VT_reduced = VT#[:num_modes, :]
+    # Tikhonov regularization parameter
+    alpha = 0.1
+    # solving for system response Ax = output_function using Tikhonov regularization
+    S_inv_reg = np.diag([s / (s**2 + alpha**2) for s in np.diag(S_reduced)])
+    x_sol_reg = VT_reduced.T @ S_inv_reg @ U_reduced.T @ output_function # regularized least-squares solution
+
+    # Estimating velocity from the system response
+    delay_indices = np.argmax(x_sol_reg)  # index of maximum response
+    estimated_delay = time_points_sampled[delay_indices]
+    v_estimated_svd = L / estimated_delay
+    print(f'Estimated velocity using SVD: {v_estimated_svd:.2f} cm/s (True velocity: {velocity.values()[0]} cm/s)')
+
+
+    plt.figure(figsize=(6,4))
+    plt.plot(time_points_sampled,x_sol_reg, label='Estimated System Response')
+    plt.xlabel('time (s)')
+    plt.ylabel('Response Amplitude') 
+    plt.title(f'SVD using Tikhonov regularization (alpha = {alpha})\n velocity = {v_estimated_svd:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)')
+    plt.legend()
+    plt.show()
