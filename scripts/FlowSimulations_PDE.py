@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import correlate
 from scipy.linalg import toeplitz
 from scipy.interpolate import interp1d
+from sklearn.linear_model import OrthogonalMatchingPursuit
 
 plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['mathtext.fontset'] = 'custom'
@@ -17,7 +18,7 @@ if __name__ == "__main__":
     mesh = fe.IntervalMesh(n_elements, 0.0, L)
 
     # Define velocity and diffusion coefficient
-    velocity = fe.Constant((15.0,))
+    velocity = fe.Constant((50.0,))
     diffusion = fe.Constant(0.04)
 
     # Define function space
@@ -370,5 +371,49 @@ if __name__ == "__main__":
     plt.xlabel('time (s)')
     plt.ylabel('Response Amplitude') 
     plt.title(f'SVD using Tikhonov regularization (alpha = {alpha})\n velocity = {v_estimated_svd:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)')
+    plt.legend()
+    plt.show()
+
+
+    ################################################################################
+    # Velocity Estimation using Orthogonal Matching Pursuit (OMP)
+    ################################################################################
+
+    # Sampling u_final[0,:] = 30 seconds every 3 seconds: having 10 samples in total
+    sampling_indices = np.arange(0, u_final.shape[0], int(u_final.shape[0]/10))
+    print(len(sampling_indices))
+    time_points = np.linspace(0, n_steps*dt, u_final.shape[0])
+    time_points_sampled = time_points[sampling_indices]
+    u_sampled = u_final[sampling_indices, :]
+    
+    # defining input and output functions of the system
+    input_function = u_sampled[:,0]
+    output_function = u_sampled[:,int(u_sampled.shape[1]/8)]
+
+    # interpolating the input and output functions to have a length 100
+    interp_length = 1000
+    interp_input = interp1d(time_points_sampled, input_function, kind='cubic')
+    interp_output = interp1d(time_points_sampled, output_function, kind='cubic')
+    time_points_sampled = np.linspace(time_points_sampled[0], time_points_sampled[-1], interp_length)
+    input_function = interp_input(time_points_sampled)
+    output_function = interp_output(time_points_sampled)
+
+    # creating the A matrix based on the input function using toeplitz structure
+    A = toeplitz(input_function, np.zeros(len(input_function)))
+
+    # Using Orthogonal Matching Pursuit (OMP) for recovering the actual input and output functions assuming sparsity
+    omp = OrthogonalMatchingPursuit(n_nonzero_coefs=5)
+    omp.fit(A, output_function)
+    x_sol_omp = omp.coef_
+    # Estimating velocity from the system response
+    delay_indices = np.argmax(x_sol_omp)  # index of maximum response
+    estimated_delay = time_points_sampled[delay_indices]
+    v_estimated_omp = L/8 / estimated_delay
+    print(f'Estimated velocity using OMP: {v_estimated_omp:.2f} cm/s (True velocity: {velocity.values()[0]} cm/s)')
+    plt.figure(figsize=(6,4))
+    plt.plot(time_points_sampled,x_sol_omp, label='Estimated System Response using OMP')
+    plt.xlabel('time (s)')
+    plt.ylabel('Response Amplitude') 
+    plt.title(f'Using Orthogonal Matching Pursuit (OMP)\n velocity = {v_estimated_omp:.2f} cm/s, (True velocity: {velocity.values()[0]} cm/s)')
     plt.legend()
     plt.show()
