@@ -7,18 +7,6 @@ from scipy.interpolate import interp1d
 from sklearn.linear_model import OrthogonalMatchingPursuit
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['mathtext.fontset'] = 'custom'
 plt.rcParams['mathtext.rm'] = 'Times New Roman'
