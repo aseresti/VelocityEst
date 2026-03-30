@@ -189,6 +189,23 @@ plt.show()
 '''
 
 
+outfile = "contrast.txt"
+timefile = "time.txt"
+
+
+data = np.column_stack(u_final)
+np.savetxt(
+    outfile,
+    data,
+    fmt="%.6f",
+    comments="# "
+)
+
+np.savetxt(
+    timefile, t, fmt="%0.6f"
+)
+
+
 
 # 3D plot of the results along t at specific x locations
 fig = plt.figure(figsize=(8,6))
